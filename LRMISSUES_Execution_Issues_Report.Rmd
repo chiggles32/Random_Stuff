@@ -1,0 +1,740 @@
+---
+title: "Execution Issues Reporting"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    theme:
+      bg: "#fafffb"
+      fg: "#00800a"
+    toc: true
+    toc_depth: 4
+params:
+  un: ''
+  pw: ''
+editor_options: 
+  chunk_output_type: inline
+
+---
+
+<style type="text/css">
+   .main-container {max-width: 80%;}
+   .row {display: flex;}
+   .column {flex: 50%;}
+</style>
+
+```{css, echo = FALSE}
+h2,h3,h4{
+  text-align: center;
+  color: black;
+  font-weight: bold;
+}
+```
+
+```{r, echo=FALSE, warning=FALSE, message=FALSE}
+
+
+library(knitr)
+library(httr)
+library(jsonlite)
+library(lubridate)
+library(tidyverse)
+library(rvest)
+library(readxl)
+library(kableExtra)
+library(bizdays)
+library(formattable)
+library(stringr)
+library(DT)
+library(gridExtra)
+library(crosstalk)
+library(plotly)
+library(treemapify)
+library(htmltools)
+
+
+paginated.get = function(link){
+  base.link = paste0(link, "&maxResults=0")
+  results = GET(base.link, authenticate(params$un, params$pw))
+  results = content(results, "text", encoding = "UTF-8")
+  results = fromJSON(results, flatten = TRUE)$total
+  
+  limit = 500
+  pages = ceiling(results/limit)
+  
+  start.at = seq(from = 0, by = limit, length.out = pages)
+  
+  links = paste0(link, "&maxResults=", limit, "&startAt=", start.at)
+  
+  get.fun = function(x){
+    api = GET(x, authenticate(params$un, params$pw))
+    apid = content(api, "text", encoding = "UTF-8")
+    results = as.data.frame(fromJSON(apid, flatten = TRUE))
+  }
+  
+  JIRA = lapply(links, get.fun)
+  
+  jira = do.call(rbind, JIRA)
+  
+  jira
+  
+}
+
+
+JIRA = paginated.get('https://track.td.com/rest/api/latest/search?jql=project%20%3D%20"LRM%20Execution%20Issues"&expand=changelog&fields=description,labels,parent,priority,components,status,summary,customfield_10006,customfield_24100,key,created,customfield_21702,customfield_18604,assignee,issuetype')
+
+epics = JIRA %>%
+  select(issues.key, issues.fields.summary, issues.fields.issuetype.name) %>%
+  filter(issues.fields.issuetype.name == "Epic") %>%
+  distinct() %>%
+  select(-issues.fields.issuetype.name) %>%
+  rename("Epic_Link" = issues.key, "Report" = issues.fields.summary)
+
+####Calendar Initialization####
+d = as.Date(c("2023-09-04", "2023-11-11", "2023-11-23", "2023-12-25", "2023-10-09", "2024-01-01", "2024-01-16", "2024-02-19","2024-05-29", "2024-06-19", "2024-07-04", "2024-09-04", "2024-10-09", "2024-11-23", "2024-12-25" ))
+
+create.calendar("TD", holidays = d, weekdays = c("saturday", "sunday"), start.date = "2023-01-01", end.date = "2025-01-01" )
+start_date = as.Date("2023-08-11")
+dates = bizseq("2023-01-01", Sys.Date(), "TD")
+
+monthseq = bizseq("2023-11-01", Sys.Date(), cal = "TD")
+
+monthseq = unique(str_sub(monthseq, 1, 7))
+######
+
+JIRA = JIRA %>% 
+  mutate(id = names(issues.changelog.histories)) %>%
+  unnest(issues.changelog.histories, keep_empty = TRUE)%>%
+  mutate(id = names(items)) %>%
+  unnest(items, keep_empty = TRUE)
+
+JIRA = JIRA %>%
+  mutate(Component = unnest_wider(JIRA, col = issues.fields.components) %>% pull(name))
+
+JIRA = JIRA %>%
+  select(issues.key, issues.fields.summary, issues.fields.description, issues.fields.created, issues.fields.customfield_18604:issues.fields.customfield_24100, issues.fields.customfield_10006, issues.fields.labels,issues.fields.priority.name, issues.fields.parent.key, issues.fields.parent.fields.summary, issues.fields.status.name, created, field, fromString, toString, Component, issues.fields.issuetype.name) %>%
+  filter(issues.fields.issuetype.name != "Epic")
+
+colnames(JIRA) = c("Key", "Summary","Description","Story_Created", "Classification", "Label", "Epic_Link", "Report_Date", "Priority", "Parent_Key", "Parent_Summary", "Current_Status", "Change_Date", "Change_Field", "From", "To", "Component", "Type")
+
+JIRA = JIRA %>%
+  mutate(Step_Name = Summary,
+         Closed_Date = ifelse(Current_Status %in% "Closed" & To == "Closed", Change_Date, NA), 
+         Parent_Key = ifelse(is.na(Parent_Key), Key, Parent_Key), 
+         Parent_Summary = ifelse(is.na(Parent_Summary), Summary, Parent_Summary), 
+         Label = ifelse(Label == "character(0)", "Unlabeled", Label),
+         Component = Component[match(Parent_Key,Key)], 
+         Report_Date = Report_Date[match(Parent_Key,Key)],
+         `Issue Category` = case_when(grepl("Data", Component) ~ "Input Data",
+                                      grepl("Error", Component) ~"Processing Issues",
+                                      grepl("Logic", Component) ~ "Logical Issues",
+                                      grepl("Results", Component) ~ "Report Results",
+                                      grepl("Other", Component) ~ "Other",
+                                      is.na(Component) ~ "NA",
+                                      TRUE ~ "Reconciliation"),
+         Component = ifelse(is.na(Component),"NA", Component),
+         Epic_Link = Epic_Link[match(Parent_Key, Key)]
+  ) %>%
+  left_join(epics, by = "Epic_Link")
+
+
+pt = JIRA %>%
+  filter(!(Current_Status %in% c("Closed", "canceled"))) %>%
+  pull(Parent_Key)
+
+pt = unique(pt)
+
+parents = JIRA %>%
+  group_by(Key) %>%
+  filter(Key %in% pt) %>%
+  filter(row_number()==1) %>%
+  ungroup()
+
+jira1 = JIRA %>%
+  filter(Parent_Key %in% pt) %>%
+  mutate(tick = ifelse(Parent_Key == Key, NA, as.numeric(sub("LRMISSUES-*", "", Key))))
+
+closed = jira1 %>%
+  ungroup() %>%
+  group_by(Parent_Key, tick) %>%
+  slice(which(as.vector(!is.na(Closed_Date))))%>%
+  ungroup()
+
+open = jira1 %>%
+  ungroup() %>%
+  group_by(Parent_Key, tick) %>%
+  filter(!(Current_Status %in% c("Closed", "canceled")), row_number()==1) %>%
+  ungroup()
+
+all_tickets = closed %>%
+  add_row(open) %>%
+  group_by(Parent_Key, tick) %>%
+  filter(row_number()==1) %>%
+  ungroup()
+
+open_controls = all_tickets %>%
+  group_by(Parent_Key) %>%
+  arrange(tick, .by_group = TRUE) %>%
+  slice(first(which(is.na(Closed_Date)))) %>%
+  ungroup()
+
+prev_step = open_controls %>%
+  ungroup() %>%
+  select(Parent_Key, tick) %>%
+  mutate(tick = tick-1)
+
+prev_step = all_tickets %>%
+  select(Parent_Key, tick, Closed_Date) %>%
+  right_join(prev_step, by = c("Parent_Key", "tick")) %>%
+  select(Closed_Date, Parent_Key) %>%
+  rename("Previous Control Closed" = Closed_Date)
+
+open_controls = open_controls %>%
+  left_join(prev_step) %>%
+  filter(Current_Status != "canceled")
+
+table1 = all_tickets %>%
+  group_by(Parent_Key) %>%
+  add_count() %>%
+  mutate(numcom = sum(!is.na(Closed_Date)), perc = percent(numcom/n,0)) %>%
+  filter(row_number() == 1) %>%
+  select(Parent_Key, perc) %>%
+  ungroup()
+
+table_data = open_controls %>%
+  left_join(table1, by = "Parent_Key") %>%
+  mutate("Previous Control Closed" = ifelse(is.na(`Previous Control Closed`), Story_Created, `Previous Control Closed`), 
+         "Days Since Last Close" = bizdays(as_date(`Previous Control Closed`),Sys.Date(), cal = "TD"))
+
+###why not?
+
+u1 = paste0("https://track.td.com/browse/", table_data$`Parent_Key`)
+u2 = paste0("https://track.td.com/browse/", table_data$Key)
+
+#####Color_bar fix#####
+bg = function(start, end, color, ...) {
+  paste("linear-gradient(90deg,transparent ",percent(start),",",
+        color, percent(start), ",", color, percent(end),
+        ", transparent", percent(end),")")
+} 
+
+color_bar2 =  function (color = "lightgray", fun = "proportion", ...) 
+{
+  fun <- match.fun(fun)
+  formatter("span", style = function(x) formattable::style(display = "inline-block",
+                                                           `unicode-bidi` = "plaintext", 
+                                                           "background" = bg(1-fun(as.numeric(x), ...), 1, color), "width"="100%" ))
+}
+
+######
+
+
+final_table = table_data %>%
+  ungroup() %>%
+  mutate(`Parent Ticket` = cell_spec(Parent_Key, "html", link = u1), Key = cell_spec(Key, "html", link = u2), 
+         `Days Since Last Close` = cell_spec(`Days Since Last Close`, background = ifelse(`Days Since Last Close` < 6, "#00800a", ifelse(`Days Since Last Close` > 10, "red", "yellow")), color = "black", bold = TRUE), 
+         perc = color_bar2("lightblue")(perc)) %>%
+  arrange(Report, Component) %>%
+  filter(!is.na(Report))
+
+#####creating data tables for different sections#####
+
+#high priority issue table
+hpoi = final_table %>%
+  filter(Priority == "High") %>%
+  select(Report_Date, Report, `Parent Ticket`, Parent_Summary, Step_Name,`Days Since Last Close`, `Issue Category`, perc ) %>%
+  rename("Completion" = perc, 
+         "Parent Summary" = Parent_Summary, 
+         "Current Control" = Step_Name, 
+         "Issue Date" = Report_Date)
+
+hpoi_tab = hpoi %>%
+  datatable(rownames = FALSE, escape = FALSE, style = "default", filter = "top", options = list(
+    columnDefs = list(list(className = 'dt-center', targets = 0:6),list(className = 'dt-right', targets = 7)),
+    pageLength = 5,
+    lengthMenu = c(10,20,30)))
+
+#tickets opened this week
+pt = JIRA %>%
+  filter(Type == "Story") %>%
+  pull(Parent_Key)
+pt = unique(pt)
+
+totw = JIRA %>%
+  filter(Type == "Story", Key %in% pt) %>%
+  group_by(Key) %>%
+  slice(n()) %>%
+  mutate(dsc = Sys.Date() - as_date(Story_Created)) %>%
+  filter(dsc < 8) %>%
+  ungroup()
+
+u1 = paste0("https://track.td.com/browse/", totw$Parent_Key)
+
+ot = totw %>%
+  select(Parent_Key, Report, Summary, Report_Date, Priority) %>%
+  mutate(Parent_Key = cell_spec(Parent_Key, "html", link = u1) ) %>%
+  rename("Parent Ticket" = Parent_Key, 
+         "Issue Date" = Report_Date) 
+
+weekly_open_table = ot %>%
+  datatable( escape = FALSE, rownames = FALSE)
+
+closed_tickets = JIRA %>%
+  group_by(Parent_Key) %>%
+  summarize(All_Closed = all(Current_Status == "Closed")) %>%
+  filter(All_Closed) %>%
+  pull(Parent_Key)
+
+tctw = JIRA %>%
+  filter(Key %in% closed_tickets, !is.na(Closed_Date)) %>%
+  group_by(Key) %>%
+  slice(n()) %>%
+  mutate(dsc = Sys.Date() - as_date(Story_Created) )%>%
+  filter(dsc < 8)%>%
+  select(-dsc) %>%
+  ungroup()
+
+u1 = paste0("https://track.td.com/browse/", tctw$Key)
+
+ct = tctw %>%
+  select(Key, Report, Summary, Report_Date, Closed_Date) %>%
+  rename("Parent Ticket" = Key, "Issue Date" = Report_Date, "Closed" = Closed_Date) %>%
+  mutate(`Parent Ticket` = cell_spec(`Parent Ticket`, "html", link = u1),
+         Closed = as_date(Closed))
+
+weekly_close_table = ct %>%
+  datatable( escape = FALSE, rownames = FALSE)
+
+
+#open by area/type and reporting group
+
+obat = final_table %>%
+  mutate(Label = as.character(Label)) %>%
+  select(`Parent Ticket`, Priority, Report, Parent_Summary, Step_Name, perc, `Days Since Last Close`, Key, Label, Report_Date, Component, `Issue Category`) %>%
+  rename("Issue Date" = Report_Date, "Summary" = Parent_Summary, "Current Control" = Step_Name, "Completion" = perc, "Control Key" = Key, "Issue Type" = Component, "Reporting Group" = Label)
+
+
+#####Sharing across tables/graphs####
+#shared_obat = SharedData$new(obat)
+#p1 = ggplot(shared_obat, aes(x = Priority, fill = `Issue Category`))+
+#   geom_dotplot(stackgroups = TRUE, binpositions = "all", stroke = .4) +
+#  labs(y = "Observations", title = "Issues by Priority") +
+#  theme(axis.ticks.y = element_blank(),
+#        axis.text.y = element_blank(),
+#       plot.title = element_text(hjust = .5),
+#       plot.title.position = "plot") 
+#p1 = ggplotly(p1) %>%
+#  layout(xaxis = list(autorange = TRUE), yaxis = list(autorange = TRUE))
+###########
+
+t1 = datatable(obat, escape = FALSE, rownames = FALSE, filter = "top",
+               extensions = 'Buttons', options = list(columnDefs = list(list(className = 'dt-center', targets = c(0:4, 6:11)),
+                                                                        list(className = 'dt-right', targets = 5),
+                                                                        list(visible=FALSE, targets=c(7,8,9,10,11))),
+                                                      dom = 'Bfrtip',
+                                                      buttons = list(list(extend = 'colvis', columns = c(7,8,9,10,11)),
+                                                                     list(extend= "colvisGroup",text="Show All",show=":hidden") # show all button
+                                                      ) # all 5 are hideable/showable by the button
+               ))
+
+#bscols(widths = c(2, NA), filter_select("Report", "Report", shared_obat, ~Report), p1)
+
+#####using apply to create month tabs####
+
+
+
+####The setup is that all parent tickets are properly labeled as open/closed and broken into lists.
+
+
+listed_closed_JIRA = JIRA %>%
+  mutate(Close_Month = as_date(Closed_Date), m_y = str_sub(Close_Month, 1, 7)) %>%
+  filter(!is.na(Close_Month),
+         Key %in% closed_tickets) %>%
+  add_row(m_y = monthseq) %>%
+  group_by(m_y) %>%
+  group_split()
+
+listed_opened_JIRA = JIRA %>%
+  mutate(Open_Month = as_date(Story_Created), m_y = str_sub(Open_Month, 1, 7)) %>%
+  filter(!is.na(Open_Month)) %>%
+  add_row(m_y = monthseq) %>%
+  group_by(m_y) %>%
+  group_split()
+
+#closed tickets
+
+month_close = function(x){
+  
+  d = x %>%
+    group_by(Key) %>%
+    filter(Key %in% pt, !is.na(Closed_Date), row_number() == 1) %>%
+    ungroup() 
+  
+  ktbl1 = d %>%
+    select(Report) %>%
+    group_by(Report) %>%
+    summarise(n()) %>%
+    ungroup() %>%
+    rename("Issues" = `n()`) %>%
+    arrange(desc(Issues)) %>%
+    kbl("html", escape = FALSE, booktabs = TRUE) %>%
+    kable_paper("hover", full_width = F)
+  
+  ktbl2 = d %>%
+    select(`Issue Category`) %>%
+    group_by(`Issue Category`) %>%
+    summarise(n()) %>%
+    ungroup() %>%
+    rename("Issues" = `n()`) %>%
+    arrange(desc(Issues)) %>%
+    kbl("html", escape = FALSE, booktabs = TRUE) %>%
+    kable_paper("hover", full_width = F)
+  
+  dt1 = d %>%
+    select(Key, Summary, Report, Close_Month, Component, Priority, Report_Date, Classification, Label, Story_Created) %>%
+    rename("Closed" = Close_Month,
+           "Issue Date" = Report_Date,
+           "Reporting Team" = Label,
+           "Created" = Story_Created) %>%
+    mutate(Created = as_date(Created))
+  
+  links = paste0("https://track.td.com/browse/", dt1$Key)
+  
+  dt1 = dt1 %>%
+    mutate(Key = cell_spec(Key, "html", link = links))
+  
+  dt1 = datatable(dt1, escape = FALSE, rownames = FALSE, filter = "top",
+               extensions = 'Buttons', options = list(columnDefs = list(list(visible=FALSE, targets=c(4,5,6,7,8,9))),
+                                                      dom = 'Bfrtip',
+                                                      buttons = list(list(extend = 'colvis', columns = c(4,5,6,7,8,9)),
+                                                                     list(extend= "colvisGroup",text="Show All",show=":hidden") # show all button
+                                                      ) # all 5 are hideable/showable by the button
+               ))
+  
+  results = list(ktbl1,ktbl2,dt1)
+  
+  results
+    
+}
+
+month_close_tabs = lapply(listed_closed_JIRA, month_close)
+
+#opened tickets
+
+month_open = function(x){
+  
+  mo = x %>%
+    pull(m_y) %>%
+    unique() 
+  
+  cal = paste(mo,"01", sep = "-")
+  z = days_in_month(cal)
+
+  caldays = 1:z
+  
+  d = x %>%
+    group_by(Key) %>%
+    filter(Key %in% pt, !is.na(Story_Created), row_number() == 1) %>%
+    ungroup() 
+  
+ 
+  
+  ktbl1 = d %>%
+    select(Report) %>%
+    group_by(Report) %>%
+    summarise(n()) %>%
+    ungroup() %>%
+    rename("Issues" = `n()`) %>%
+    arrange(desc(Issues)) %>%
+    kbl("html", escape = FALSE, booktabs = TRUE) %>%
+    kable_paper("hover", full_width = F)
+  
+  ktbl2 = d %>%
+    select(`Issue Category`) %>%
+    group_by(`Issue Category`) %>%
+    summarise(n()) %>%
+    ungroup() %>%
+    rename("Issues" = `n()`) %>%
+    arrange(desc(Issues)) %>%
+    kbl("html", escape = FALSE, booktabs = TRUE) %>%
+    kable_paper("hover", full_width = F)
+  
+  tod = d %>%
+    ungroup() %>%
+    mutate(xday = day(Open_Month)) %>%
+    group_by(xday) %>%
+    summarize(n())
+  
+  df1 = as.data.frame(caldays)
+  cn = "xday"
+  colnames(df1) = cn
+  
+  df1 = df1 %>%
+    left_join(tod, by = "xday") %>%
+    mutate("daysdata" = ifelse(is.na(`n()`),0, `n()`)) %>%
+    filter(xday %in% day(bizseq(`cal`, add.bizdays(ceiling_date(as_date(cal), unit ="month"), -1), cal = "TD"))) %>%
+    select(-`n()`) 
+  
+  mi = ifelse(is.na(max(df1$daysdata)), 0, max(df1$daysdata))
+  
+  idp = ggplot(df1, aes(y = daysdata, x = 1:dim(df1)[1])) +
+    geom_point() +
+    labs(title = paste0("Issues by Business Day for ", mo), y = "Count", x = "Business Day") +
+    scale_y_continuous(breaks = seq(from = 0, to = mi +1))
+  
+   dt1 = d %>%
+    select(Key, Summary, Report, Open_Month, Component, Priority, Report_Date, Classification, Label) %>%
+    rename("Created" = Open_Month,
+           "Issue Date" = Report_Date,
+           "Reporting Team" = Label)
+  
+  links = paste0("https://track.td.com/browse/", dt1$Key)
+  
+  dt1 = dt1 %>%
+    mutate(Key = cell_spec(Key, "html", link = links))
+  
+  dt1 = datatable(dt1, escape = FALSE, rownames = FALSE, filter = "top",
+               extensions = 'Buttons', options = list(columnDefs = list(list(visible=FALSE, targets=c(4,5,6,7,8))),
+                                                      dom = 'Bfrtip',
+                                                      buttons = list(list(extend = 'colvis', columns = c(4,5,6,7,8)),
+                                                                     list(extend= "colvisGroup",text="Show All",show=":hidden") # show all button
+                                                      ) # all 5 are hideable/showable by the button
+               ))
+  
+  results = list(ktbl1,ktbl2,dt1,idp)
+  
+  results
+}
+
+month_open_tabs = lapply(listed_opened_JIRA, month_open)
+
+
+#####all open by category and type####
+
+catt = final_table %>%
+  select(`Issue Category`) %>%
+  group_by(`Issue Category`) %>%
+  summarise(n()) %>%
+  ungroup() %>%
+  rename("Issues" = `n()`) %>%
+  arrange(desc(Issues)) %>%
+  kbl("html", escape = FALSE, booktabs = TRUE) %>%
+  kable_paper("hover", full_width = F)
+
+
+tpd1 = final_table %>%
+  select(Report) %>%
+  group_by(Report) %>%
+  summarize(n()) %>%
+  ungroup() %>%
+  rename("Issues" = `n()`)
+
+ktpd = tpd1 %>%
+  arrange(desc(Issues)) %>%
+  kbl("html", escape = FALSE, booktabs = TRUE) %>%
+  kable_paper("hover", full_width = F)
+
+tpd = final_table %>%
+  select(Report, `Issue Category`) %>%
+  group_by(Report, `Issue Category`) %>%
+  summarize(n()) %>%
+  ungroup() %>%
+  rename("Issues" = `n()`) %>%
+  mutate(Report = str_wrap(Report,18))
+
+tp = tpd %>%
+  ggplot(aes(area = Issues, fill = `Issue Category`, label = Report, subgroup=Report)) +
+  geom_treemap(layout="squarified")+
+  geom_treemap_subgroup_border(colour = "black", size = 4) +
+  geom_treemap_subgroup_text(place = "center",colour = "black", size = 10, fontface = "bold") +
+  scale_fill_brewer(palette = "Greens")
+
+
+```
+
+
+### [LRMISSUES JIRA](https://track.td.com/projects/LRMISSUES?selectedItem=jp.ricksoft.plugins.wbsgantt-for-jira:wbsgantt-project) | [Confluence](https://collaborate.td.com/display/LRM2/Report+Execution+Issue)
+
+<hr style="border:2px solid green">
+<hr style="border:2px solid green">
+
+## Weekly Snapshot
+
+<hr style="border:1px solid black">
+
+#### Opened Tickets
+
+```{r, echo= FALSE, warning=FALSE, message=FALSE, fig.align='center'}
+weekly_open_table
+
+```
+
+<hr style="border:1px solid black">
+
+#### Closed Tickets
+
+```{r, echo= FALSE, warning=FALSE, message=FALSE, fig.align='center'}
+weekly_close_table
+
+```
+
+<hr style="border:2px solid green">
+<hr style="border:2px solid green">
+
+## Currently Open High Priority Issues
+
+<hr style="border:1px solid black">
+
+```{r, echo= FALSE, warning=FALSE, message=FALSE, fig.align='center'}
+
+hpoi_tab
+```
+
+<hr style="border:2px solid green">
+<hr style="border:2px solid green">
+
+## All Open Issues 
+
+<hr style="border:1px solid black">
+
+<div class = "row">
+<div class = "column">
+
+#### Open Issues by Report
+```{r echo=FALSE}
+ktpd
+```
+</div>
+
+<div class = "column">
+#### Open Issues by Category 
+```{r echo=FALSE}
+catt
+```
+</div>
+</div>
+
+<hr style="border:1px solid black">
+
+#### Open Issues Breakdown by Report and Category
+
+```{r echo=FALSE, fig.align= 'center'}
+tp
+```
+
+<hr style="border:1px solid black">
+
+#### All Currently Open Issues
+```{r, echo= FALSE, warning=FALSE, message=FALSE, fig.align='center'}
+
+t1
+
+```
+
+<hr style="border:2px solid green">
+<hr style="border:2px solid green">
+<hr style="border:2px solid black">
+<hr style="border:2px solid black">
+
+## Monthly Summary {.tabset}
+
+```{r include = FALSE}
+# Why, oh why do I need this chunk?
+datatable(NULL)
+```
+
+```{r, results="asis", echo=FALSE}
+
+for(i in 1:length(monthseq)){
+  
+  cat("\n") 
+  cat("###", monthseq[i], "\n") # Create second level headings with the names.
+  
+  cat("####", "Opened Tickets", "\n")
+  
+  cat('<hr style="border:2px solid green">', "\n")
+  
+  cat("####", "Issues Reported By Business Day", "\n")
+  
+  print(month_open_tabs[[i]][[4]])
+  
+  cat('<hr style="border:1px solid black">', "\n")
+  
+  cat('<div class = "row">',
+      "\n",
+      '<div class = "column">')
+  
+  cat("####", "Opened Issues by Report", "\n")
+  
+  print(month_open_tabs[[i]][[1]])
+  
+  cat('</div>', "\n")
+  
+  cat('<div class = "column">')
+  
+  cat("\n")
+  
+  cat("####", "Opened Issues by Category", "\n")
+  
+  print(month_open_tabs[[i]][[2]])
+  
+  cat("\n")
+  
+  cat('</div>', "\n")
+  cat('</div>', "\n")
+  
+  cat('<hr style="border:1px solid black">', "\n")
+  
+  cat("####", "Opened Issues Table", "\n")
+  
+  print(tagList(month_open_tabs[[i]][[3]]))
+  
+  cat("\n")
+  
+  cat("\n")
+  
+  cat('<hr style="border:1px solid black">', "\n")
+  
+  cat('<hr style="border:2px solid green">', "\n")
+  cat('<hr style="border:2px solid green">', "\n")
+  
+  cat("####", "Closed Tickets", "\n")
+  
+  cat('<hr style="border:2px solid green">', "\n")
+  
+  cat('<div class = "row">',
+      "\n",
+      '<div class = "column">')
+  
+  cat("####", "Closed Issues by Report", "\n")
+  
+  print(month_close_tabs[[i]][[1]])
+  
+  cat('</div>', "\n")
+  
+  cat('<div class = "column">')
+  
+  cat("\n")
+  
+  cat("####", "Closed Issues by Category", "\n")
+  
+  print(month_close_tabs[[i]][[2]])
+  
+  cat("\n")
+  
+  cat('</div>', "\n")
+  cat('</div>', "\n")
+  
+  cat('<hr style="border:1px solid black">', "\n")
+  
+  cat("####", "Closed Issues Table", "\n")
+  
+  print(tagList(month_close_tabs[[i]][[3]]))
+  
+  cat("\n")
+  
+  
+  
+}
+
+```
+
