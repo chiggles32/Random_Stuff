@@ -13,7 +13,7 @@ missile_initial = function(i = 75){
   x = .5*usr[2]
   y = 0*usr[4]
   velo = runif(1,.015,.025)
-  dxv = rnorm(n, drift, .001)
+  dxv = rnorm(n, drift, .003)
   xv = 0
   yv = rep(velo, n)
   decel = -.00025 * 0:(n-1)
@@ -21,9 +21,7 @@ missile_initial = function(i = 75){
   x = x + cumsum(dxv)
   y = cumsum(y + yv) + decel
   b = runif(n)
-  # cutoff = round(n * .3)
-  # bn = sample(c(0,0,1), cutoff, replace = TRUE)
-  # b[((n-cutoff)+1):n] = bn
+
   
   color <<- hsv(runif(1),1,b,1)
   color1 <<- tail(color,1)
@@ -37,12 +35,12 @@ missile_display = function(x){
   
   for (i in 1:nrow(x)){
     
-    if(i>30){points(x[i-2,1],x[i-2,2], pch = 8, col = hsv(0,0,0,1), cex = 1.1)
+    # if(i>30){points(x[i-2,1],x[i-2,2], pch = 18, col = hsv(0,0,0,1), cex = 1.1)
+    #   rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
+    #   points(x[i,1],x[i,2], pch = 18, col = color[i], cex = 1.1)
+    # } else {
       rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
-      points(x[i,1],x[i,2], pch = 8, col = color[i], cex = 1.1)
-    } else {
-      rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
-      points(x[i,1],x[i,2], pch = 8, col = color[i], cex = 1.1)}
+      points(x[i,1],x[i,2], pch = 18, col = color[i], cex = 1.1)#}
     
     Sys.sleep(.03)
     dev.flush()
@@ -85,17 +83,17 @@ firework = function(size, iter){
   y <<- tail(missile,1)[2]
   particles = t(sapply(1:size, particles_initial))
   
-  z = runif(size,-.03,.03)
+  z = rnorm(size,0, .05)
   color = runif(1) + z
   color = ifelse(color>=1,.99, ifelse(color<=0,0,color))
-  decay = generate_sigmoid_vector(iter,25,.7)
+  decay = generate_sigmoid_vector(iter,15,.5)
   
   missile_display(missile)
   
   for (i in 1:iter){
     particles = particles_update(particles)
     particles_display(particles, hsv(color,1,decay[i],1))
-    Sys.sleep(.03)
+    Sys.sleep(.02)
     dev.flush()
   }
   
@@ -108,7 +106,10 @@ par(mar = c(0, 0, 0, 0))
 plot.new()
 usr <- par("usr") # Get the user coordinates of the plot region
 rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,1), border = NA)
-for (i in 1:4){
-  firework(450,50)
+
+
+while(TRUE){
+  firework(360,50)
+  
 }
 
