@@ -92,7 +92,25 @@ generate_firework = function() {
   
   graph_data = c(m_l, particles_in_time)
   
-  graph_data = do.call(rbind, graph_data)
+  do.call(rbind, graph_data)
+  
+}
+
+fireworks = function(x) {
+  spacer = cumsum(round(rnorm(x, 40, 10)))
+ 
+  fdata = list()
+  fdata[[1]] = generate_firework()
+  
+  for (i in 2:x){
+    w = generate_firework()
+    w[,3] = w[,3] + spacer[i]
+    fdata[[i]] = w
+  }
+
+  graph_data = do.call(rbind, fdata)
+  
+  graph_data[,4] = ifelse(graph_data[,4]>=1,.99, ifelse(graph_data[,4]<=0,0,graph_data[,4]))
   
   listed_frames = lapply(split(graph_data, graph_data[,3]), function(x) matrix(x, ncol = 5))
   
@@ -101,12 +119,12 @@ generate_firework = function() {
 
 display_fireworks = function(x) {
   rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
-  points(x[,1],x[,2], pch = 8, col = hsv(x[,4], 1, x[,5],1), cex = 1.1)
-  Sys.sleep(.03)
+  points(x[,1],x[,2], pch = 16, col = hsv(x[,4], 1, x[,5],1), cex = .5)
+  Sys.sleep(.05)
   dev.flush()
 }
 
-lapply(generate_firework(), display_fireworks)
+lapply(fireworks(10), display_fireworks)
 
 
 
