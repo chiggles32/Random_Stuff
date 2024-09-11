@@ -1,10 +1,9 @@
-# library(scattermore)
+
 
 x11(width = 11, height = 10)
-par(mar = c(0, 0, 0, 0))
+par(mar = c(0, 0, 0, 0), bg = "black")
 plot.new()
 usr <- par("usr") # Get the user coordinates of the plot region
-rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,1), border = NA)
 
 generate_sigmoid_vector <- function(n, steepness = 10, midpoint = 0.8) {
   x <- seq(0, 1, length.out = n)  # Create a normalized sequence from 0 to 1
@@ -77,8 +76,10 @@ generate_firework = function() {
   particles = t(sapply(1:300, particle_initial))
   
   particles[,6] = particles[,6] + rnorm(300,0,.1)
+  particles[,6] =  ifelse(particles[,6]>=1,.99, ifelse(particles[,6]<=0,0,particles[,6]))
   
-  decay = generate_sigmoid_vector(50,15,.7)
+  
+  decay = generate_sigmoid_vector(50,13,.6)
   
   particles_in_time = list()
   particles_in_time[[1]] = particles
@@ -98,85 +99,37 @@ generate_firework = function() {
   
 }
 
-fireworks = function(x) {
-  spacer = cumsum(round(rnorm(x, 32, 10)))
- 
-  fdata = list()
-  fdata[[1]] = generate_firework()
-  
-  for (i in 2:x){
-    w = generate_firework()
-    w[,3] = w[,3] + spacer[i]
-    fdata[[i]] = w
-  }
-
-  graph_data = do.call(rbind, fdata)
-  
-  graph_data[,4] = ifelse(graph_data[,4]>=1,.99, ifelse(graph_data[,4]<=0,0,graph_data[,4]))
-  
-  listed_frames = lapply(split(graph_data, graph_data[,3]), function(x) matrix(x, ncol = 5))
-  
-  listed_frames
-}
-
 display_fireworks = function(x) {
   rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
-  points(x[,1],x[,2], pch = 8, col = hsv(x[,4], 1, x[,5],1), cex = .5)
-  Sys.sleep(.05)
+  points(x[,1],x[,2], pch = 16, col = hsv(x[,4], 1, x[,5],1), cex = .15)
+  Sys.sleep(.033)
   dev.flush()
 }
 
 
-# lapply(fireworks(10), display_fireworks)
 
 
+initial_firework = generate_firework()
+counter = 0
+while (TRUE) {
 
-colorize = function(x){
-  x = as.data.frame(x)
-  x[,4] = hsv(x[,4], 1, x[,5],1)
-  x
+  counter = counter + 1
+  display_fireworks(matrix(initial_firework[initial_firework[,3]==counter,], ncol = 5))
+  
+  random_spacer = round(runif(1, 18,50))
+  
+  if (counter >= random_spacer){
+    next_firework = generate_firework()
+    next_firework[,3] = next_firework[,3] + random_spacer
+    initial_firework = rbind(initial_firework, next_firework)
+    
+    initial_firework = initial_firework[-1:-counter,]
+    initial_firework[,3] = initial_firework[,3] - counter
+    counter = 0
+  }
+  
+  
+  
 }
 
 
-
-display_fireworks_V2 = function(x) {
-  rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
-  points(x[,1],x[,2], pch = 16, col = x[,4], cex = 1)
-  Sys.sleep(.04)
-  dev.flush()
-}
-
-w = fireworks(20)
-w = lapply(w, colorize)
-
-lapply(w, display_fireworks_V2)
-
-# x is a list and we iterate over it in a loop
-
-
-# 
-# display_fireworks_V3 = function(x) {
-#   
-#   x11(width = 11, height = 10)
-#   par(mar = c(0, 0, 0, 0), bg = "black")
-#   plot.new()
-#   
-#   usr <- par("usr") # Get the user coordinates of the plot region
-#   
-#   for (i in 1:length(x)){
-#     
-#     
-#   }
-#   
-#     
-#   rectangle = rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
-#   
-#   scattermoreplot(x[,1],x[,2], xlim = c(0,1), ylim = c(0,1), col = x[,4], cex = 1)
-#   Sys.sleep(.01)
-#   dev.flush()
-# }
-# 
-# w = fireworks(20)
-# w = lapply(w, colorize)
-# 
-# lapply(w, display_fireworks_V3)
