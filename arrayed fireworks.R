@@ -1,3 +1,5 @@
+library(scattermore)
+
 x11(width = 11, height = 10)
 par(mar = c(0, 0, 0, 0))
 plot.new()
@@ -76,7 +78,7 @@ generate_firework = function() {
   
   particles[,6] = particles[,6] + rnorm(300,0,.1)
   
-  decay = generate_sigmoid_vector(50,15,.5)
+  decay = generate_sigmoid_vector(50,15,.7)
   
   particles_in_time = list()
   particles_in_time[[1]] = particles
@@ -119,12 +121,62 @@ fireworks = function(x) {
 
 display_fireworks = function(x) {
   rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
-  points(x[,1],x[,2], pch = 16, col = hsv(x[,4], 1, x[,5],1), cex = .5)
+  points(x[,1],x[,2], pch = 8, col = hsv(x[,4], 1, x[,5],1), cex = .5)
   Sys.sleep(.05)
   dev.flush()
 }
 
-lapply(fireworks(10), display_fireworks)
+
+# lapply(fireworks(10), display_fireworks)
 
 
 
+colorize = function(x){
+  x = as.data.frame(x)
+  x[,4] = hsv(x[,4], 1, x[,5],1)
+  x
+}
+
+
+
+display_fireworks_V2 = function(x) {
+  rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
+  points(x[,1],x[,2], pch = 16, col = x[,4], cex = 1)
+  Sys.sleep(.04)
+  dev.flush()
+}
+
+w = fireworks(20)
+w = lapply(w, colorize)
+
+lapply(w, display_fireworks_V2)
+
+# x is a list and we iterate over it in a loop
+
+
+# 
+# display_fireworks_V3 = function(x) {
+#   
+#   x11(width = 11, height = 10)
+#   par(mar = c(0, 0, 0, 0), bg = "black")
+#   plot.new()
+#   
+#   usr <- par("usr") # Get the user coordinates of the plot region
+#   
+#   for (i in 1:length(x)){
+#     
+#     
+#   }
+#   
+#     
+#   rectangle = rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
+#   
+#   scattermoreplot(x[,1],x[,2], xlim = c(0,1), ylim = c(0,1), col = x[,4], cex = 1)
+#   Sys.sleep(.01)
+#   dev.flush()
+# }
+# 
+# w = fireworks(20)
+# w = lapply(w, colorize)
+# 
+# lapply(w, display_fireworks_V3)
