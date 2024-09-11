@@ -5,6 +5,9 @@ par(mar = c(0, 0, 0, 0), bg = "black")
 plot.new()
 usr <- par("usr") # Get the user coordinates of the plot region
 
+frame_update = .035
+
+
 generate_sigmoid_vector <- function(n, steepness = 10, midpoint = 0.8) {
   x <- seq(0, 1, length.out = n)  # Create a normalized sequence from 0 to 1
   sigmoid_vector <- 1 / (1 + exp(steepness * (x - midpoint)))  # Logistic decay
@@ -102,8 +105,27 @@ generate_firework = function() {
 display_fireworks = function(x) {
   rect(usr[1], usr[3], usr[2], usr[4], col = hsv(0,0,0,.3), border = NA)
   points(x[,1],x[,2], pch = 16, col = hsv(x[,4], 1, x[,5],1), cex = .15)
-  Sys.sleep(.033)
   dev.flush()
+}
+
+update_firework = function(x) {
+  next_firework = generate_firework()
+  next_firework[,3] = next_firework[,3] + random_spacer
+  initial_firework = rbind(initial_firework, next_firework)
+  
+  initial_firework = initial_firework[-1:-counter,]
+  initial_firework[,3] = initial_firework[,3] - counter
+  counter <<- 0
+  initial_firework <<- initial_firework
+}
+
+time_wrapped_update_firework = function(x){
+  time_taken = system.time(update_firework(x))["elapsed"]
+  
+  remaining_time = max(frame_update - time_taken, 0)
+  
+  # Pause for the remaining time (if needed)
+  Sys.sleep(remaining_time)
 }
 
 
@@ -114,22 +136,20 @@ counter = 0
 while (TRUE) {
 
   counter = counter + 1
-  display_fireworks(matrix(initial_firework[initial_firework[,3]==counter,], ncol = 5))
   
   random_spacer = round(runif(1, 18,50))
   
-  if (counter >= random_spacer){
-    next_firework = generate_firework()
-    next_firework[,3] = next_firework[,3] + random_spacer
-    initial_firework = rbind(initial_firework, next_firework)
-    
-    initial_firework = initial_firework[-1:-counter,]
-    initial_firework[,3] = initial_firework[,3] - counter
-    counter = 0
+  if (counter < random_spacer){
+    display_fireworks(matrix(initial_firework[initial_firework[,3]==counter,], ncol = 5))
+    Sys.sleep(frame_update)
+  } else {
+    display_fireworks(matrix(initial_firework[initial_firework[,3]==counter,], ncol = 5))
+    time_wrapped_update_firework(initial_firework)
   }
   
+    
+  }
   
-  
-}
+
 
 
